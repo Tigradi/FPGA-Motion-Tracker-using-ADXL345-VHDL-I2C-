@@ -1,0 +1,742 @@
+-----code complet-----
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity accelem is
+    port(
+        clk      : in  std_logic;
+        reset    : in  std_logic;
+        scl      : out std_logic;
+        sda      : inout std_logic;
+        sdo_addr : out std_logic;
+        int1     : in  std_logic;
+        CS_n     : out std_logic;
+        ledr     : out std_logic_vector(9 downto 0);
+        HEX0     : out std_logic_vector(6 downto 0);
+        HEX1     : out std_logic_vector(6 downto 0);
+        HEX2     : out std_logic_vector(6 downto 0);
+        HEX3     : out std_logic_vector(6 downto 0);
+        HEX4     : out std_logic_vector(6 downto 0);
+        HEX5     : out std_logic_vector(6 downto 0)
+    );
+end accelem;
+
+architecture xy_abs_3digits_full_z_bar of accelem is
+
+    constant TICK_DIV : integer := 249; -- about 5 us at 50 MHz
+
+    signal tick_cnt : integer range 0 to TICK_DIV := 0;
+    signal tick_5us : std_logic := '0';
+
+    signal scl_int       : std_logic := '1';
+    signal sda_drive_low : std_logic := '0';
+    signal sda_in        : std_logic;
+
+    constant ADDR_W        : std_logic_vector(7 downto 0) := x"A6";
+    constant ADDR_R        : std_logic_vector(7 downto 0) := x"A7";
+
+    constant REG_POWER_CTL : std_logic_vector(7 downto 0) := x"2D";
+    constant DATA_MEASURE  : std_logic_vector(7 downto 0) := x"08";
+
+    constant REG_DATAX0    : std_logic_vector(7 downto 0) := x"32";
+    constant REG_DATAX1    : std_logic_vector(7 downto 0) := x"33";
+    constant REG_DATAY0    : std_logic_vector(7 downto 0) := x"34";
+    constant REG_DATAY1    : std_logic_vector(7 downto 0) := x"35";
+    constant REG_DATAZ0    : std_logic_vector(7 downto 0) := x"36";
+    constant REG_DATAZ1    : std_logic_vector(7 downto 0) := x"37";
+
+    type state_type is (
+        ST_WAIT,
+        ST_START_A,
+        ST_START_B,
+        ST_REPSTART_A,
+        ST_REPSTART_B,
+        ST_REPSTART_C,
+        ST_LOAD_BYTE,
+        ST_SEND_BIT_L,
+        ST_SEND_BIT_H,
+        ST_ACK_L,
+        ST_ACK_H,
+        ST_ACK_SAMPLE,
+        ST_READ_BIT_L,
+        ST_READ_BIT_H,
+        ST_READ_BIT_SAMPLE,
+        ST_NACK_L,
+        ST_NACK_H,
+        ST_STOP_A,
+        ST_STOP_B,
+        ST_STOP_C,
+        ST_AFTER_WRITE,
+        ST_STORE_X0,
+        ST_STORE_X1,
+        ST_STORE_Y0,
+        ST_STORE_Y1,
+        ST_STORE_Z0,
+        ST_STORE_Z1,
+        ST_LOOP_WAIT,
+        ST_ERROR
+    );
+
+    type stage_type is (
+        SG_W_ADDR,
+        SG_W_REG,
+        SG_W_DATA,
+
+        SG_R_X0_ADDRW,
+        SG_R_X0_REG,
+        SG_R_X0_ADDRR,
+        SG_R_X0_DATA,
+
+        SG_R_X1_ADDRW,
+        SG_R_X1_REG,
+        SG_R_X1_ADDRR,
+        SG_R_X1_DATA,
+
+        SG_R_Y0_ADDRW,
+        SG_R_Y0_REG,
+        SG_R_Y0_ADDRR,
+        SG_R_Y0_DATA,
+
+        SG_R_Y1_ADDRW,
+        SG_R_Y1_REG,
+        SG_R_Y1_ADDRR,
+        SG_R_Y1_DATA,
+
+        SG_R_Z0_ADDRW,
+        SG_R_Z0_REG,
+        SG_R_Z0_ADDRR,
+        SG_R_Z0_DATA,
+
+        SG_R_Z1_ADDRW,
+        SG_R_Z1_REG,
+        SG_R_Z1_ADDRR,
+        SG_R_Z1_DATA
+    );
+
+    signal state : state_type := ST_WAIT;
+    signal stage : stage_type := SG_W_ADDR;
+
+    signal tx_byte : std_logic_vector(7 downto 0) := (others => '0');
+    signal rx_byte : std_logic_vector(7 downto 0) := (others => '0');
+
+    signal x0      : std_logic_vector(7 downto 0) := (others => '0');
+    signal x1      : std_logic_vector(7 downto 0) := (others => '0');
+    signal y0      : std_logic_vector(7 downto 0) := (others => '0');
+    signal y1      : std_logic_vector(7 downto 0) := (others => '0');
+    signal z0      : std_logic_vector(7 downto 0) := (others => '0');
+    signal z1      : std_logic_vector(7 downto 0) := (others => '0');
+
+    signal bit_cnt   : integer range 0 to 7 := 7;
+    signal wait_cnt  : integer range 0 to 200000 := 0;
+    signal loop_wait : integer range 0 to 20000 := 0;
+
+    signal x_signed  : signed(15 downto 0);
+    signal y_signed  : signed(15 downto 0);
+    signal z_signed  : signed(15 downto 0);
+
+    signal x_hundreds : integer range 0 to 9 := 0;
+    signal x_tens     : integer range 0 to 9 := 0;
+    signal x_units    : integer range 0 to 9 := 0;
+
+    signal y_hundreds : integer range 0 to 9 := 0;
+    signal y_tens     : integer range 0 to 9 := 0;
+    signal y_units    : integer range 0 to 9 := 0;
+
+    -- bargraph Z sur 7 LEDs seulement (LEDR6 downto 0)
+    signal z_bar7     : std_logic_vector(6 downto 0) := (others => '0');
+
+    function to_7seg(digit : integer) return std_logic_vector is
+    begin
+        case digit is
+            when 0 => return "1000000";
+            when 1 => return "1111001";
+            when 2 => return "0100100";
+            when 3 => return "0110000";
+            when 4 => return "0011001";
+            when 5 => return "0010010";
+            when 6 => return "0000010";
+            when 7 => return "1111000";
+            when 8 => return "0000000";
+            when 9 => return "0010000";
+            when others => return "1111111";
+        end case;
+    end function;
+
+begin
+
+    CS_n <= '1';
+    sdo_addr <= '0';
+
+    scl <= scl_int;
+    sda <= '0' when sda_drive_low = '1' else 'Z';
+    sda_in <= sda;
+
+    x_signed <= signed(x1 & x0);
+    y_signed <= signed(y1 & y0);
+    z_signed <= signed(z1 & z0);
+
+    -- X on 3 seven-segments
+    HEX0 <= to_7seg(x_units);
+    HEX1 <= to_7seg(x_tens);
+    HEX2 <= to_7seg(x_hundreds);
+
+    -- Y on 3 seven-segments
+    HEX3 <= to_7seg(y_units);
+    HEX4 <= to_7seg(y_tens);
+    HEX5 <= to_7seg(y_hundreds);
+
+    -- LEDs :
+    -- LEDR9 = signe X (positif => ON, négatif => OFF)
+    -- LEDR8 = signe Y (positif => ON, négatif => OFF)
+    -- LEDR7 = signe Z (positif => ON, négatif => OFF)
+    -- LEDR6..0 = valeur de Z en bargraph
+    ledr(9) <= not x_signed(15);
+    ledr(8) <= not y_signed(15);
+    ledr(7) <= not z_signed(15);
+    ledr(6 downto 0) <= z_bar7;
+
+    ------------------------------------------------------------
+    -- Convert X and Y to 3 decimal digits (absolute values)
+    ------------------------------------------------------------
+    process(x_signed, y_signed)
+        variable xi : integer;
+        variable yi : integer;
+        variable xa : integer;
+        variable ya : integer;
+    begin
+        xi := to_integer(x_signed);
+        yi := to_integer(y_signed);
+
+        if xi < 0 then
+            xa := -xi;
+        else
+            xa := xi;
+        end if;
+
+        if yi < 0 then
+            ya := -yi;
+        else
+            ya := yi;
+        end if;
+
+        if xa > 999 then
+            xa := 999;
+        end if;
+
+        if ya > 999 then
+            ya := 999;
+        end if;
+
+        x_hundreds <= xa / 100;
+        x_tens     <= (xa mod 100) / 10;
+        x_units    <= xa mod 10;
+
+        y_hundreds <= ya / 100;
+        y_tens     <= (ya mod 100) / 10;
+        y_units    <= ya mod 10;
+    end process;
+
+    ------------------------------------------------------------
+    -- Convert full Z to 7-level bar graph
+    ------------------------------------------------------------
+    process(z_signed)
+        variable zi : integer;
+        variable za : integer;
+    begin
+        zi := to_integer(z_signed);
+
+        if zi < 0 then
+            za := -zi;
+        else
+            za := zi;
+        end if;
+
+        if za < 128 then
+            z_bar7 <= "0000001";
+        elsif za < 256 then
+            z_bar7 <= "0000011";
+        elsif za < 384 then
+            z_bar7 <= "0000111";
+        elsif za < 512 then
+            z_bar7 <= "0001111";
+        elsif za < 640 then
+            z_bar7 <= "0011111";
+        elsif za < 768 then
+            z_bar7 <= "0111111";
+        else
+            z_bar7 <= "1111111";
+        end if;
+    end process;
+
+    ------------------------------------------------------------
+    -- Slow tick generator
+    ------------------------------------------------------------
+    process(clk, reset)
+    begin
+        if reset = '1' then
+            tick_cnt <= 0;
+            tick_5us <= '0';
+        elsif rising_edge(clk) then
+            if tick_cnt = TICK_DIV then
+                tick_cnt <= 0;
+                tick_5us <= '1';
+            else
+                tick_cnt <= tick_cnt + 1;
+                tick_5us <= '0';
+            end if;
+        end if;
+    end process;
+
+    ------------------------------------------------------------
+    -- Main FSM
+    ------------------------------------------------------------
+    process(clk, reset)
+    begin
+        if reset = '1' then
+            state         <= ST_WAIT;
+            stage         <= SG_W_ADDR;
+            tx_byte       <= (others => '0');
+            rx_byte       <= (others => '0');
+            x0            <= (others => '0');
+            x1            <= (others => '0');
+            y0            <= (others => '0');
+            y1            <= (others => '0');
+            z0            <= (others => '0');
+            z1            <= (others => '0');
+            bit_cnt       <= 7;
+            wait_cnt      <= 0;
+            loop_wait     <= 0;
+            scl_int       <= '1';
+            sda_drive_low <= '0';
+
+        elsif rising_edge(clk) then
+            if tick_5us = '1' then
+                case state is
+
+                    when ST_WAIT =>
+                        scl_int <= '1';
+                        sda_drive_low <= '0';
+
+                        if wait_cnt = 200000 then
+                            wait_cnt <= 0;
+                            stage <= SG_W_ADDR;
+                            state <= ST_START_A;
+                        else
+                            wait_cnt <= wait_cnt + 1;
+                        end if;
+
+                    when ST_START_A =>
+                        scl_int <= '1';
+                        sda_drive_low <= '0';
+                        state <= ST_START_B;
+
+                    when ST_START_B =>
+                        scl_int <= '1';
+                        sda_drive_low <= '1';
+                        state <= ST_LOAD_BYTE;
+
+                    when ST_REPSTART_A =>
+                        scl_int <= '0';
+                        sda_drive_low <= '0';
+                        state <= ST_REPSTART_B;
+
+                    when ST_REPSTART_B =>
+                        scl_int <= '1';
+                        sda_drive_low <= '0';
+                        state <= ST_REPSTART_C;
+
+                    when ST_REPSTART_C =>
+                        scl_int <= '1';
+                        sda_drive_low <= '1';
+                        state <= ST_LOAD_BYTE;
+
+                    when ST_LOAD_BYTE =>
+                        case stage is
+                            when SG_W_ADDR =>
+                                tx_byte <= ADDR_W;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_W_REG =>
+                                tx_byte <= REG_POWER_CTL;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_W_DATA =>
+                                tx_byte <= DATA_MEASURE;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_X0_ADDRW =>
+                                tx_byte <= ADDR_W;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_X0_REG =>
+                                tx_byte <= REG_DATAX0;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_X0_ADDRR =>
+                                tx_byte <= ADDR_R;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_X0_DATA =>
+                                rx_byte <= (others => '0');
+                                bit_cnt <= 7;
+                                state <= ST_READ_BIT_L;
+
+                            when SG_R_X1_ADDRW =>
+                                tx_byte <= ADDR_W;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_X1_REG =>
+                                tx_byte <= REG_DATAX1;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_X1_ADDRR =>
+                                tx_byte <= ADDR_R;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_X1_DATA =>
+                                rx_byte <= (others => '0');
+                                bit_cnt <= 7;
+                                state <= ST_READ_BIT_L;
+
+                            when SG_R_Y0_ADDRW =>
+                                tx_byte <= ADDR_W;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_Y0_REG =>
+                                tx_byte <= REG_DATAY0;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_Y0_ADDRR =>
+                                tx_byte <= ADDR_R;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_Y0_DATA =>
+                                rx_byte <= (others => '0');
+                                bit_cnt <= 7;
+                                state <= ST_READ_BIT_L;
+
+                            when SG_R_Y1_ADDRW =>
+                                tx_byte <= ADDR_W;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_Y1_REG =>
+                                tx_byte <= REG_DATAY1;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_Y1_ADDRR =>
+                                tx_byte <= ADDR_R;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_Y1_DATA =>
+                                rx_byte <= (others => '0');
+                                bit_cnt <= 7;
+                                state <= ST_READ_BIT_L;
+
+                            when SG_R_Z0_ADDRW =>
+                                tx_byte <= ADDR_W;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_Z0_REG =>
+                                tx_byte <= REG_DATAZ0;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_Z0_ADDRR =>
+                                tx_byte <= ADDR_R;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_Z0_DATA =>
+                                rx_byte <= (others => '0');
+                                bit_cnt <= 7;
+                                state <= ST_READ_BIT_L;
+
+                            when SG_R_Z1_ADDRW =>
+                                tx_byte <= ADDR_W;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_Z1_REG =>
+                                tx_byte <= REG_DATAZ1;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_Z1_ADDRR =>
+                                tx_byte <= ADDR_R;
+                                bit_cnt <= 7;
+                                state <= ST_SEND_BIT_L;
+
+                            when SG_R_Z1_DATA =>
+                                rx_byte <= (others => '0');
+                                bit_cnt <= 7;
+                                state <= ST_READ_BIT_L;
+                        end case;
+
+                    when ST_SEND_BIT_L =>
+                        scl_int <= '0';
+
+                        if tx_byte(bit_cnt) = '0' then
+                            sda_drive_low <= '1';
+                        else
+                            sda_drive_low <= '0';
+                        end if;
+
+                        state <= ST_SEND_BIT_H;
+
+                    when ST_SEND_BIT_H =>
+                        scl_int <= '1';
+
+                        if bit_cnt = 0 then
+                            state <= ST_ACK_L;
+                        else
+                            bit_cnt <= bit_cnt - 1;
+                            state <= ST_SEND_BIT_L;
+                        end if;
+
+                    when ST_ACK_L =>
+                        scl_int <= '0';
+                        sda_drive_low <= '0';
+                        state <= ST_ACK_H;
+
+                    when ST_ACK_H =>
+                        scl_int <= '1';
+                        sda_drive_low <= '0';
+                        state <= ST_ACK_SAMPLE;
+
+                    when ST_ACK_SAMPLE =>
+                        scl_int <= '1';
+                        sda_drive_low <= '0';
+
+                        if sda_in = '1' then
+                            state <= ST_ERROR;
+                        else
+                            case stage is
+                                when SG_W_ADDR =>
+                                    stage <= SG_W_REG;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_W_REG =>
+                                    stage <= SG_W_DATA;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_W_DATA =>
+                                    state <= ST_STOP_A;
+
+                                when SG_R_X0_ADDRW =>
+                                    stage <= SG_R_X0_REG;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_R_X0_REG =>
+                                    stage <= SG_R_X0_ADDRR;
+                                    state <= ST_REPSTART_A;
+
+                                when SG_R_X0_ADDRR =>
+                                    stage <= SG_R_X0_DATA;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_R_X1_ADDRW =>
+                                    stage <= SG_R_X1_REG;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_R_X1_REG =>
+                                    stage <= SG_R_X1_ADDRR;
+                                    state <= ST_REPSTART_A;
+
+                                when SG_R_X1_ADDRR =>
+                                    stage <= SG_R_X1_DATA;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_R_Y0_ADDRW =>
+                                    stage <= SG_R_Y0_REG;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_R_Y0_REG =>
+                                    stage <= SG_R_Y0_ADDRR;
+                                    state <= ST_REPSTART_A;
+
+                                when SG_R_Y0_ADDRR =>
+                                    stage <= SG_R_Y0_DATA;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_R_Y1_ADDRW =>
+                                    stage <= SG_R_Y1_REG;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_R_Y1_REG =>
+                                    stage <= SG_R_Y1_ADDRR;
+                                    state <= ST_REPSTART_A;
+
+                                when SG_R_Y1_ADDRR =>
+                                    stage <= SG_R_Y1_DATA;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_R_Z0_ADDRW =>
+                                    stage <= SG_R_Z0_REG;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_R_Z0_REG =>
+                                    stage <= SG_R_Z0_ADDRR;
+                                    state <= ST_REPSTART_A;
+
+                                when SG_R_Z0_ADDRR =>
+                                    stage <= SG_R_Z0_DATA;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_R_Z1_ADDRW =>
+                                    stage <= SG_R_Z1_REG;
+                                    state <= ST_LOAD_BYTE;
+
+                                when SG_R_Z1_REG =>
+                                    stage <= SG_R_Z1_ADDRR;
+                                    state <= ST_REPSTART_A;
+
+                                when SG_R_Z1_ADDRR =>
+                                    stage <= SG_R_Z1_DATA;
+                                    state <= ST_LOAD_BYTE;
+
+                                when others =>
+                                    state <= ST_ERROR;
+                            end case;
+                        end if;
+
+                    when ST_READ_BIT_L =>
+                        scl_int <= '0';
+                        sda_drive_low <= '0';
+                        state <= ST_READ_BIT_H;
+
+                    when ST_READ_BIT_H =>
+                        scl_int <= '1';
+                        sda_drive_low <= '0';
+                        state <= ST_READ_BIT_SAMPLE;
+
+                    when ST_READ_BIT_SAMPLE =>
+                        scl_int <= '1';
+                        sda_drive_low <= '0';
+                        rx_byte(bit_cnt) <= sda_in;
+
+                        if bit_cnt = 0 then
+                            state <= ST_NACK_L;
+                        else
+                            bit_cnt <= bit_cnt - 1;
+                            state <= ST_READ_BIT_L;
+                        end if;
+
+                    when ST_NACK_L =>
+                        scl_int <= '0';
+                        sda_drive_low <= '0';
+                        state <= ST_NACK_H;
+
+                    when ST_NACK_H =>
+                        scl_int <= '1';
+                        sda_drive_low <= '0';
+                        state <= ST_STOP_A;
+
+                    when ST_STOP_A =>
+                        scl_int <= '0';
+                        sda_drive_low <= '1';
+                        state <= ST_STOP_B;
+
+                    when ST_STOP_B =>
+                        scl_int <= '1';
+                        sda_drive_low <= '1';
+                        state <= ST_STOP_C;
+
+                    when ST_STOP_C =>
+                        scl_int <= '1';
+                        sda_drive_low <= '0';
+
+                        if stage = SG_W_DATA then
+                            state <= ST_AFTER_WRITE;
+                        elsif stage = SG_R_X0_DATA then
+                            state <= ST_STORE_X0;
+                        elsif stage = SG_R_X1_DATA then
+                            state <= ST_STORE_X1;
+                        elsif stage = SG_R_Y0_DATA then
+                            state <= ST_STORE_Y0;
+                        elsif stage = SG_R_Y1_DATA then
+                            state <= ST_STORE_Y1;
+                        elsif stage = SG_R_Z0_DATA then
+                            state <= ST_STORE_Z0;
+                        elsif stage = SG_R_Z1_DATA then
+                            state <= ST_STORE_Z1;
+                        else
+                            state <= ST_ERROR;
+                        end if;
+
+                    when ST_AFTER_WRITE =>
+                        stage <= SG_R_X0_ADDRW;
+                        state <= ST_START_A;
+
+                    when ST_STORE_X0 =>
+                        x0 <= rx_byte;
+                        stage <= SG_R_X1_ADDRW;
+                        state <= ST_START_A;
+
+                    when ST_STORE_X1 =>
+                        x1 <= rx_byte;
+                        stage <= SG_R_Y0_ADDRW;
+                        state <= ST_START_A;
+
+                    when ST_STORE_Y0 =>
+                        y0 <= rx_byte;
+                        stage <= SG_R_Y1_ADDRW;
+                        state <= ST_START_A;
+
+                    when ST_STORE_Y1 =>
+                        y1 <= rx_byte;
+                        stage <= SG_R_Z0_ADDRW;
+                        state <= ST_START_A;
+
+                    when ST_STORE_Z0 =>
+                        z0 <= rx_byte;
+                        stage <= SG_R_Z1_ADDRW;
+                        state <= ST_START_A;
+
+                    when ST_STORE_Z1 =>
+                        z1 <= rx_byte;
+                        loop_wait <= 0;
+                        state <= ST_LOOP_WAIT;
+
+                    when ST_LOOP_WAIT =>
+                        scl_int <= '1';
+                        sda_drive_low <= '0';
+
+                        if loop_wait = 20000 then
+                            loop_wait <= 0;
+                            stage <= SG_R_X0_ADDRW;
+                            state <= ST_START_A;
+                        else
+                            loop_wait <= loop_wait + 1;
+                        end if;
+
+                    when ST_ERROR =>
+                        scl_int <= '1';
+                        sda_drive_low <= '0';
+                        state <= ST_ERROR;
+
+                    when others =>
+                        state <= ST_ERROR;
+
+                end case;
+            end if;
+        end if;
+    end process;
+
+end xy_abs_3digits_full_z_bar;
