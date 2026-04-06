@@ -22,12 +22,12 @@ entity accelem is
     );
 end accelem;
 
-architecture xy_abs_3digits_full_z_bar of accelem is
+architecture arch_accelem of accelem is
 
-    constant TICK_DIV : integer := 249; -- about 5 us at 50 MHz
+    constant Freq_DIV : integer := 249; 
 
-    signal tick_cnt : integer range 0 to TICK_DIV := 0;
-    signal tick_5us : std_logic := '0';
+    signal compt_Freq : integer range 0 to Freq_DIV := 0;
+    signal pulse_5us  : std_logic := '0';
 
     signal scl_int       : std_logic := '1';
     signal sda_drive_low : std_logic := '0';
@@ -47,35 +47,35 @@ architecture xy_abs_3digits_full_z_bar of accelem is
     constant REG_DATAZ1    : std_logic_vector(7 downto 0) := x"37";
 
     type state_type is (
-        ST_WAIT,
-        ST_START_A,
-        ST_START_B,
-        ST_REPSTART_A,
-        ST_REPSTART_B,
-        ST_REPSTART_C,
-        ST_LOAD_BYTE,
-        ST_SEND_BIT_L,
-        ST_SEND_BIT_H,
-        ST_ACK_L,
-        ST_ACK_H,
-        ST_ACK_SAMPLE,
-        ST_READ_BIT_L,
-        ST_READ_BIT_H,
-        ST_READ_BIT_SAMPLE,
-        ST_NACK_L,
-        ST_NACK_H,
-        ST_STOP_A,
-        ST_STOP_B,
-        ST_STOP_C,
-        ST_AFTER_WRITE,
-        ST_STORE_X0,
-        ST_STORE_X1,
-        ST_STORE_Y0,
-        ST_STORE_Y1,
-        ST_STORE_Z0,
-        ST_STORE_Z1,
-        ST_LOOP_WAIT,
-        ST_ERROR
+        IDLE,
+        START_A,
+        START_B,
+        REPSTART_A,
+        REPSTART_B,
+        REPSTART_C,
+        LOAD_BYTE,
+        SEND_BIT_L,
+        SEND_BIT_H,
+        ACK_L,
+        ACK_H,
+        ACK_SAMPLE,
+        READ_BIT_L,
+        READ_BIT_H,
+        READ_BIT_SAMPLE,
+        NACK_L,
+        NACK_H,
+        STOP_A,
+        STOP_B,
+        STOP_C,
+        AFTER_WRITE,
+        STORE_X0,
+        STORE_X1,
+        STORE_Y0,
+        STORE_Y1,
+        STORE_Z0,
+        STORE_Z1,
+        LOOP_WAIT,
+        ERROR
     );
 
     type stage_type is (
@@ -114,7 +114,7 @@ architecture xy_abs_3digits_full_z_bar of accelem is
         SG_R_Z1_DATA
     );
 
-    signal state : state_type := ST_WAIT;
+    signal state : state_type := IDLE;
     signal stage : stage_type := SG_W_ADDR;
 
     signal tx_byte : std_logic_vector(7 downto 0) := (others => '0');
@@ -129,7 +129,7 @@ architecture xy_abs_3digits_full_z_bar of accelem is
 
     signal bit_cnt   : integer range 0 to 7 := 7;
     signal wait_cnt  : integer range 0 to 200000 := 0;
-    signal loop_wait : integer range 0 to 20000 := 0;
+    signal Wait_loop : integer range 0 to 20000 := 0;
 
     signal x_signed  : signed(15 downto 0);
     signal y_signed  : signed(15 downto 0);
@@ -143,8 +143,7 @@ architecture xy_abs_3digits_full_z_bar of accelem is
     signal y_tens     : integer range 0 to 9 := 0;
     signal y_units    : integer range 0 to 9 := 0;
 
-    -- bargraph Z sur 7 LEDs seulement (LEDR6 downto 0)
-    signal z_bar7     : std_logic_vector(6 downto 0) := (others => '0');
+    signal z_bargraph : std_logic_vector(6 downto 0) := (others => '0');
 
     function to_7seg(digit : integer) return std_logic_vector is
     begin
@@ -164,7 +163,6 @@ architecture xy_abs_3digits_full_z_bar of accelem is
     end function;
 
 begin
-
     CS_n <= '1';
     sdo_addr <= '0';
 
@@ -176,25 +174,21 @@ begin
     y_signed <= signed(y1 & y0);
     z_signed <= signed(z1 & z0);
 
-    -- X on 3 seven-segments
+    
     HEX0 <= to_7seg(x_units);
     HEX1 <= to_7seg(x_tens);
     HEX2 <= to_7seg(x_hundreds);
 
-    -- Y on 3 seven-segments
     HEX3 <= to_7seg(y_units);
     HEX4 <= to_7seg(y_tens);
     HEX5 <= to_7seg(y_hundreds);
 
-    -- LEDs :
-    -- LEDR9 = signe X (positif => ON, négatif => OFF)
-    -- LEDR8 = signe Y (positif => ON, négatif => OFF)
-    -- LEDR7 = signe Z (positif => ON, négatif => OFF)
-    -- LEDR6..0 = valeur de Z en bargraph
+    -- LEDs 
+	 
     ledr(9) <= not x_signed(15);
     ledr(8) <= not y_signed(15);
     ledr(7) <= not z_signed(15);
-    ledr(6 downto 0) <= z_bar7;
+    ledr(6 downto 0) <= z_bargraph;
 
     ------------------------------------------------------------
     -- Convert X and Y to 3 decimal digits (absolute values)
@@ -238,7 +232,7 @@ begin
     end process;
 
     ------------------------------------------------------------
-    -- Convert full Z to 7-level bar graph
+    -- Convertion full Z to  bargraphe
     ------------------------------------------------------------
     process(z_signed)
         variable zi : integer;
@@ -253,48 +247,48 @@ begin
         end if;
 
         if za < 128 then
-            z_bar7 <= "0000001";
+            z_bargraph <= "0000001";
         elsif za < 256 then
-            z_bar7 <= "0000011";
+            z_bargraph <= "0000011";
         elsif za < 384 then
-            z_bar7 <= "0000111";
+            z_bargraph <= "0000111";
         elsif za < 512 then
-            z_bar7 <= "0001111";
+            z_bargraph <= "0001111";
         elsif za < 640 then
-            z_bar7 <= "0011111";
+            z_bargraph <= "0011111";
         elsif za < 768 then
-            z_bar7 <= "0111111";
+            z_bargraph <= "0111111";
         else
-            z_bar7 <= "1111111";
+            z_bargraph <= "1111111";
         end if;
     end process;
 
     ------------------------------------------------------------
-    -- Slow tick generator
+    -- GENERATEUR DE LENTS PULSE
     ------------------------------------------------------------
     process(clk, reset)
     begin
         if reset = '1' then
-            tick_cnt <= 0;
-            tick_5us <= '0';
+            compt_Freq <= 0;
+            pulse_5us  <= '0';
         elsif rising_edge(clk) then
-            if tick_cnt = TICK_DIV then
-                tick_cnt <= 0;
-                tick_5us <= '1';
+            if compt_Freq = Freq_DIV then
+                compt_Freq <= 0;
+                pulse_5us  <= '1';
             else
-                tick_cnt <= tick_cnt + 1;
-                tick_5us <= '0';
+                compt_Freq <= compt_Freq + 1; 
+                pulse_5us  <= '0';
             end if;
         end if;
     end process;
 
     ------------------------------------------------------------
-    -- Main FSM
+    -- FSM PRICIPALE
     ------------------------------------------------------------
     process(clk, reset)
     begin
         if reset = '1' then
-            state         <= ST_WAIT;
+            state         <= IDLE;
             stage         <= SG_W_ADDR;
             tx_byte       <= (others => '0');
             rx_byte       <= (others => '0');
@@ -306,190 +300,190 @@ begin
             z1            <= (others => '0');
             bit_cnt       <= 7;
             wait_cnt      <= 0;
-            loop_wait     <= 0;
+            Wait_loop     <= 0;
             scl_int       <= '1';
             sda_drive_low <= '0';
 
         elsif rising_edge(clk) then
-            if tick_5us = '1' then
+            if pulse_5us = '1' then
                 case state is
 
-                    when ST_WAIT =>
+                    when IDLE =>
                         scl_int <= '1';
                         sda_drive_low <= '0';
 
                         if wait_cnt = 200000 then
                             wait_cnt <= 0;
                             stage <= SG_W_ADDR;
-                            state <= ST_START_A;
+                            state <= START_A;
                         else
                             wait_cnt <= wait_cnt + 1;
                         end if;
 
-                    when ST_START_A =>
+                    when START_A =>
                         scl_int <= '1';
                         sda_drive_low <= '0';
-                        state <= ST_START_B;
+                        state <= START_B;
 
-                    when ST_START_B =>
+                    when START_B =>
                         scl_int <= '1';
                         sda_drive_low <= '1';
-                        state <= ST_LOAD_BYTE;
+                        state <= LOAD_BYTE;
 
-                    when ST_REPSTART_A =>
+                    when REPSTART_A =>
                         scl_int <= '0';
                         sda_drive_low <= '0';
-                        state <= ST_REPSTART_B;
+                        state <= REPSTART_B;
 
-                    when ST_REPSTART_B =>
+                    when REPSTART_B =>
                         scl_int <= '1';
                         sda_drive_low <= '0';
-                        state <= ST_REPSTART_C;
+                        state <= REPSTART_C;
 
-                    when ST_REPSTART_C =>
+                    when REPSTART_C =>
                         scl_int <= '1';
                         sda_drive_low <= '1';
-                        state <= ST_LOAD_BYTE;
+                        state <= LOAD_BYTE;
 
-                    when ST_LOAD_BYTE =>
+                    when LOAD_BYTE =>
                         case stage is
                             when SG_W_ADDR =>
                                 tx_byte <= ADDR_W;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_W_REG =>
                                 tx_byte <= REG_POWER_CTL;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_W_DATA =>
                                 tx_byte <= DATA_MEASURE;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_X0_ADDRW =>
                                 tx_byte <= ADDR_W;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_X0_REG =>
                                 tx_byte <= REG_DATAX0;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_X0_ADDRR =>
                                 tx_byte <= ADDR_R;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_X0_DATA =>
                                 rx_byte <= (others => '0');
                                 bit_cnt <= 7;
-                                state <= ST_READ_BIT_L;
+                                state <= READ_BIT_L;
 
                             when SG_R_X1_ADDRW =>
                                 tx_byte <= ADDR_W;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_X1_REG =>
                                 tx_byte <= REG_DATAX1;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_X1_ADDRR =>
                                 tx_byte <= ADDR_R;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_X1_DATA =>
                                 rx_byte <= (others => '0');
                                 bit_cnt <= 7;
-                                state <= ST_READ_BIT_L;
+                                state <= READ_BIT_L;
 
                             when SG_R_Y0_ADDRW =>
                                 tx_byte <= ADDR_W;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_Y0_REG =>
                                 tx_byte <= REG_DATAY0;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_Y0_ADDRR =>
                                 tx_byte <= ADDR_R;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_Y0_DATA =>
                                 rx_byte <= (others => '0');
                                 bit_cnt <= 7;
-                                state <= ST_READ_BIT_L;
+                                state <= READ_BIT_L;
 
                             when SG_R_Y1_ADDRW =>
                                 tx_byte <= ADDR_W;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_Y1_REG =>
                                 tx_byte <= REG_DATAY1;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_Y1_ADDRR =>
                                 tx_byte <= ADDR_R;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_Y1_DATA =>
                                 rx_byte <= (others => '0');
                                 bit_cnt <= 7;
-                                state <= ST_READ_BIT_L;
+                                state <= READ_BIT_L;
 
                             when SG_R_Z0_ADDRW =>
                                 tx_byte <= ADDR_W;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_Z0_REG =>
                                 tx_byte <= REG_DATAZ0;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_Z0_ADDRR =>
                                 tx_byte <= ADDR_R;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_Z0_DATA =>
                                 rx_byte <= (others => '0');
                                 bit_cnt <= 7;
-                                state <= ST_READ_BIT_L;
+                                state <= READ_BIT_L;
 
                             when SG_R_Z1_ADDRW =>
                                 tx_byte <= ADDR_W;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_Z1_REG =>
                                 tx_byte <= REG_DATAZ1;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_Z1_ADDRR =>
                                 tx_byte <= ADDR_R;
                                 bit_cnt <= 7;
-                                state <= ST_SEND_BIT_L;
+                                state <= SEND_BIT_L;
 
                             when SG_R_Z1_DATA =>
                                 rx_byte <= (others => '0');
                                 bit_cnt <= 7;
-                                state <= ST_READ_BIT_L;
+                                state <= READ_BIT_L;
                         end case;
 
-                    when ST_SEND_BIT_L =>
+                    when SEND_BIT_L =>
                         scl_int <= '0';
 
                         if tx_byte(bit_cnt) = '0' then
@@ -498,245 +492,245 @@ begin
                             sda_drive_low <= '0';
                         end if;
 
-                        state <= ST_SEND_BIT_H;
+                        state <= SEND_BIT_H;
 
-                    when ST_SEND_BIT_H =>
+                    when SEND_BIT_H =>
                         scl_int <= '1';
 
                         if bit_cnt = 0 then
-                            state <= ST_ACK_L;
+                            state <= ACK_L;
                         else
                             bit_cnt <= bit_cnt - 1;
-                            state <= ST_SEND_BIT_L;
+                            state <= SEND_BIT_L;
                         end if;
 
-                    when ST_ACK_L =>
+                    when ACK_L =>
                         scl_int <= '0';
                         sda_drive_low <= '0';
-                        state <= ST_ACK_H;
+                        state <= ACK_H;
 
-                    when ST_ACK_H =>
+                    when ACK_H =>
                         scl_int <= '1';
                         sda_drive_low <= '0';
-                        state <= ST_ACK_SAMPLE;
+                        state <= ACK_SAMPLE;
 
-                    when ST_ACK_SAMPLE =>
+                    when ACK_SAMPLE =>
                         scl_int <= '1';
                         sda_drive_low <= '0';
 
                         if sda_in = '1' then
-                            state <= ST_ERROR;
+                            state <= ERROR;
                         else
                             case stage is
                                 when SG_W_ADDR =>
                                     stage <= SG_W_REG;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_W_REG =>
                                     stage <= SG_W_DATA;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_W_DATA =>
-                                    state <= ST_STOP_A;
+                                    state <= STOP_A;
 
                                 when SG_R_X0_ADDRW =>
                                     stage <= SG_R_X0_REG;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_R_X0_REG =>
                                     stage <= SG_R_X0_ADDRR;
-                                    state <= ST_REPSTART_A;
+                                    state <= REPSTART_A;
 
                                 when SG_R_X0_ADDRR =>
                                     stage <= SG_R_X0_DATA;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_R_X1_ADDRW =>
                                     stage <= SG_R_X1_REG;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_R_X1_REG =>
                                     stage <= SG_R_X1_ADDRR;
-                                    state <= ST_REPSTART_A;
+                                    state <= REPSTART_A;
 
                                 when SG_R_X1_ADDRR =>
                                     stage <= SG_R_X1_DATA;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_R_Y0_ADDRW =>
                                     stage <= SG_R_Y0_REG;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_R_Y0_REG =>
                                     stage <= SG_R_Y0_ADDRR;
-                                    state <= ST_REPSTART_A;
+                                    state <= REPSTART_A;
 
                                 when SG_R_Y0_ADDRR =>
                                     stage <= SG_R_Y0_DATA;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_R_Y1_ADDRW =>
                                     stage <= SG_R_Y1_REG;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_R_Y1_REG =>
                                     stage <= SG_R_Y1_ADDRR;
-                                    state <= ST_REPSTART_A;
+                                    state <= REPSTART_A;
 
                                 when SG_R_Y1_ADDRR =>
                                     stage <= SG_R_Y1_DATA;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_R_Z0_ADDRW =>
                                     stage <= SG_R_Z0_REG;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_R_Z0_REG =>
                                     stage <= SG_R_Z0_ADDRR;
-                                    state <= ST_REPSTART_A;
+                                    state <= REPSTART_A;
 
                                 when SG_R_Z0_ADDRR =>
                                     stage <= SG_R_Z0_DATA;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_R_Z1_ADDRW =>
                                     stage <= SG_R_Z1_REG;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when SG_R_Z1_REG =>
                                     stage <= SG_R_Z1_ADDRR;
-                                    state <= ST_REPSTART_A;
+                                    state <= REPSTART_A;
 
                                 when SG_R_Z1_ADDRR =>
                                     stage <= SG_R_Z1_DATA;
-                                    state <= ST_LOAD_BYTE;
+                                    state <= LOAD_BYTE;
 
                                 when others =>
-                                    state <= ST_ERROR;
+                                    state <= ERROR;
                             end case;
                         end if;
 
-                    when ST_READ_BIT_L =>
+                    when READ_BIT_L =>
                         scl_int <= '0';
                         sda_drive_low <= '0';
-                        state <= ST_READ_BIT_H;
+                        state <= READ_BIT_H;
 
-                    when ST_READ_BIT_H =>
+                    when READ_BIT_H =>
                         scl_int <= '1';
                         sda_drive_low <= '0';
-                        state <= ST_READ_BIT_SAMPLE;
+                        state <= READ_BIT_SAMPLE;
 
-                    when ST_READ_BIT_SAMPLE =>
+                    when READ_BIT_SAMPLE =>
                         scl_int <= '1';
                         sda_drive_low <= '0';
                         rx_byte(bit_cnt) <= sda_in;
 
                         if bit_cnt = 0 then
-                            state <= ST_NACK_L;
+                            state <= NACK_L;
                         else
                             bit_cnt <= bit_cnt - 1;
-                            state <= ST_READ_BIT_L;
+                            state <= READ_BIT_L;
                         end if;
 
-                    when ST_NACK_L =>
+                    when NACK_L =>
                         scl_int <= '0';
                         sda_drive_low <= '0';
-                        state <= ST_NACK_H;
+                        state <= NACK_H;
 
-                    when ST_NACK_H =>
+                    when NACK_H =>
                         scl_int <= '1';
                         sda_drive_low <= '0';
-                        state <= ST_STOP_A;
+                        state <= STOP_A;
 
-                    when ST_STOP_A =>
+                    when STOP_A =>
                         scl_int <= '0';
                         sda_drive_low <= '1';
-                        state <= ST_STOP_B;
+                        state <= STOP_B;
 
-                    when ST_STOP_B =>
+                    when STOP_B =>
                         scl_int <= '1';
                         sda_drive_low <= '1';
-                        state <= ST_STOP_C;
+                        state <= STOP_C;
 
-                    when ST_STOP_C =>
+                    when STOP_C =>
                         scl_int <= '1';
                         sda_drive_low <= '0';
 
                         if stage = SG_W_DATA then
-                            state <= ST_AFTER_WRITE;
+                            state <= AFTER_WRITE;
                         elsif stage = SG_R_X0_DATA then
-                            state <= ST_STORE_X0;
+                            state <= STORE_X0;
                         elsif stage = SG_R_X1_DATA then
-                            state <= ST_STORE_X1;
+                            state <= STORE_X1;
                         elsif stage = SG_R_Y0_DATA then
-                            state <= ST_STORE_Y0;
+                            state <= STORE_Y0;
                         elsif stage = SG_R_Y1_DATA then
-                            state <= ST_STORE_Y1;
+                            state <= STORE_Y1;
                         elsif stage = SG_R_Z0_DATA then
-                            state <= ST_STORE_Z0;
+                            state <= STORE_Z0;
                         elsif stage = SG_R_Z1_DATA then
-                            state <= ST_STORE_Z1;
+                            state <= STORE_Z1;
                         else
-                            state <= ST_ERROR;
+                            state <= ERROR;
                         end if;
 
-                    when ST_AFTER_WRITE =>
+                    when AFTER_WRITE =>
                         stage <= SG_R_X0_ADDRW;
-                        state <= ST_START_A;
+                        state <= START_A;
 
-                    when ST_STORE_X0 =>
+                    when STORE_X0 =>
                         x0 <= rx_byte;
                         stage <= SG_R_X1_ADDRW;
-                        state <= ST_START_A;
+                        state <= START_A;
 
-                    when ST_STORE_X1 =>
+                    when STORE_X1 =>
                         x1 <= rx_byte;
                         stage <= SG_R_Y0_ADDRW;
-                        state <= ST_START_A;
+                        state <= START_A;
 
-                    when ST_STORE_Y0 =>
+                    when STORE_Y0 =>
                         y0 <= rx_byte;
                         stage <= SG_R_Y1_ADDRW;
-                        state <= ST_START_A;
+                        state <= START_A;
 
-                    when ST_STORE_Y1 =>
+                    when STORE_Y1 =>
                         y1 <= rx_byte;
                         stage <= SG_R_Z0_ADDRW;
-                        state <= ST_START_A;
+                        state <= START_A;
 
-                    when ST_STORE_Z0 =>
+                    when STORE_Z0 =>
                         z0 <= rx_byte;
                         stage <= SG_R_Z1_ADDRW;
-                        state <= ST_START_A;
+                        state <= START_A;
 
-                    when ST_STORE_Z1 =>
+                    when STORE_Z1 =>
                         z1 <= rx_byte;
-                        loop_wait <= 0;
-                        state <= ST_LOOP_WAIT;
+                        Wait_loop <= 0;
+                        state <= LOOP_WAIT;
 
-                    when ST_LOOP_WAIT =>
+                    when LOOP_WAIT =>
                         scl_int <= '1';
                         sda_drive_low <= '0';
 
-                        if loop_wait = 20000 then
-                            loop_wait <= 0;
+                        if Wait_loop = 20000 then
+                            Wait_loop <= 0;
                             stage <= SG_R_X0_ADDRW;
-                            state <= ST_START_A;
+                            state <= START_A;
                         else
-                            loop_wait <= loop_wait + 1;
+                            Wait_loop <= Wait_loop + 1;
                         end if;
 
-                    when ST_ERROR =>
+                    when ERROR =>
                         scl_int <= '1';
                         sda_drive_low <= '0';
-                        state <= ST_ERROR;
+                        state <= ERROR;
 
                     when others =>
-                        state <= ST_ERROR;
+                        state <= ERROR;
 
                 end case;
             end if;
         end if;
     end process;
 
-end xy_abs_3digits_full_z_bar;
+end arch_accelem;
